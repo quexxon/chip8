@@ -304,3 +304,81 @@ test "0x8XY0 - Store the value of VY in VX" {
     try expect(chip8.registers[2] == 0);
     try expect(chip8.pc == 0x204);
 }
+
+test "0x8XY1 - Set VX to VX | VY" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0x8011);
+    try expect(chip8.registers[0] == 0);
+    try expect(chip8.registers[1] == 0);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[2] = 0xF0;
+    chip8.registers[3] = 0x0F;
+    chip8.runInstruction(0x8231);
+    try expect(chip8.registers[2] == 0xFF);
+    try expect(chip8.registers[3] == 0x0F);
+    try expect(chip8.pc == 0x204);
+}
+
+test "0x8XY2 - Set VX to VX & VY" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0x8012);
+    try expect(chip8.registers[0] == 0);
+    try expect(chip8.registers[1] == 0);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[2] = 0b1111_1100;
+    chip8.registers[3] = 0b0011_1111;
+    chip8.runInstruction(0x8232);
+    try expect(chip8.registers[2] == 0b0011_1100);
+    try expect(chip8.registers[3] == 0b0011_1111);
+    try expect(chip8.pc == 0x204);
+}
+
+test "0x8XY3 - Set VX to VX ^ VY" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0x8013);
+    try expect(chip8.registers[0] == 0);
+    try expect(chip8.registers[1] == 0);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[2] = 0b1100;
+    chip8.registers[3] = 0b0110;
+    chip8.runInstruction(0x8233);
+    try expect(chip8.registers[2] == 0b1010);
+    try expect(chip8.registers[3] == 0b0110);
+    try expect(chip8.pc == 0x204);
+}
+
+test "0x8XY4 - Add VY to VX (w/ carry in VF)" {
+    var chip8 = Chip8.init();
+    chip8.registers[0] = 2;
+    chip8.registers[1] = 3;
+    chip8.runInstruction(0x8014);
+    try expect(chip8.registers[0] == 5);
+    try expect(chip8.registers[1] == 3);
+    try expect(chip8.registers[0xF] == 0);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[2] = 0xFF;
+    chip8.registers[3] = 2;
+    chip8.runInstruction(0x8234);
+    try expect(chip8.registers[2] == 1);
+    try expect(chip8.registers[3] == 2);
+    try expect(chip8.registers[0xF] == 1);
+    try expect(chip8.pc == 0x204);
+}
+
+test "0x8XY5 - Subtract VY from VX (w/ borrow in VF)" {
+    var chip8 = Chip8.init();
+    chip8.registers[0] = 5;
+    chip8.registers[1] = 3;
+    chip8.runInstruction(0x8015);
+    try expect(chip8.registers[0] == 2);
+    try expect(chip8.registers[1] == 3);
+    try expect(chip8.registers[0xF] == 1);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[2] = 0;
+    chip8.registers[3] = 1;
+    chip8.runInstruction(0x8235);
+    try expect(chip8.registers[2] == 0xFF);
+    try expect(chip8.registers[3] == 1);
+    try expect(chip8.registers[0xF] == 0);
+    try expect(chip8.pc == 0x204);
+}
