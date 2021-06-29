@@ -114,7 +114,7 @@ const Chip8 = struct {
                     self.registers[0xF] = if (borrow) 0 else 1;
                 },
                 0xE => {
-                    self.registers[0xF] = vy.* & 0b1;
+                    self.registers[0xF] = (vy.* & 0b1000_0000) >> 7;
                     vx.* = vy.* << 1;
                 },
                 else => {},
@@ -123,7 +123,7 @@ const Chip8 = struct {
                 self.pc += 2;
             },
             0xA000 => self.i = instruction & 0xFFF,
-            0xB000 => self.i = (instruction & 0xFFF) + self.registers[0],
+            0xB000 => self.pc = (instruction & 0xFFF) + self.registers[0],
             0xC000 => vx.* = randomByte() & @intCast(u8, instruction & 0xFF),
             0xD000 => {
                 const x = vx.*;
@@ -380,5 +380,93 @@ test "0x8XY5 - Subtract VY from VX (w/ borrow in VF)" {
     try expect(chip8.registers[2] == 0xFF);
     try expect(chip8.registers[3] == 1);
     try expect(chip8.registers[0xF] == 0);
+    try expect(chip8.pc == 0x204);
+}
+
+test "0x8XY6 - VX = VY >> 1; VF = LSB prior to shift" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0x8016);
+    try expect(chip8.registers[0] == 0);
+    try expect(chip8.registers[1] == 0);
+    try expect(chip8.registers[0xF] == 0);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[3] = 0xF;
+    chip8.runInstruction(0x8236);
+    try expect(chip8.registers[2] == 0b111);
+    try expect(chip8.registers[3] == 0xF);
+    try expect(chip8.registers[0xF] == 1);
+    try expect(chip8.pc == 0x204);
+}
+
+test "0x8XY7 - VX = VY - VX (w/ borrow in VF)" {
+    var chip8 = Chip8.init();
+    chip8.registers[0] = 3;
+    chip8.registers[1] = 5;
+    chip8.runInstruction(0x8017);
+    try expect(chip8.registers[0] == 2);
+    try expect(chip8.registers[1] == 5);
+    try expect(chip8.registers[0xF] == 1);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[2] = 1;
+    chip8.registers[3] = 0;
+    chip8.runInstruction(0x8237);
+    try expect(chip8.registers[2] == 0xFF);
+    try expect(chip8.registers[3] == 0);
+    try expect(chip8.registers[0xF] == 0);
+    try expect(chip8.pc == 0x204);
+}
+
+test "0x8XYE - VX = VY << 1; VF = MSB prior to shift" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0x801E);
+    try expect(chip8.registers[0] == 0);
+    try expect(chip8.registers[1] == 0);
+    try expect(chip8.registers[0xF] == 0);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[3] = 0xF0;
+    chip8.runInstruction(0x823E);
+    try expect(chip8.registers[2] == 0b1110_0000);
+    try expect(chip8.registers[3] == 0xF0);
+    try expect(chip8.registers[0xF] == 1);
+    try expect(chip8.pc == 0x204);
+}
+
+test "0x9XY0 - Skip next instruction if VX != VY" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0x9010);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[2] = 1;
+    chip8.runInstruction(0x9020);
+    try expect(chip8.pc == 0x206);
+}
+
+test "0xANNN - Store NNN in I" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0xA000);
+    try expect(chip8.i == 0);
+    try expect(chip8.pc == 0x202);
+    chip8.runInstruction(0xAFFF);
+    try expect(chip8.i == 0xFFF);
+    try expect(chip8.pc == 0x204);
+}
+
+test "0xBNNN - Jump to NNN + V0" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0xB500);
+    try expect(chip8.pc == 0x500);
+    chip8.registers[0] = 0x23;
+    chip8.runInstruction(0xB100);
+    try expect(chip8.pc == 0x123);
+}
+
+test "0xCXNN - VX = randomByte() & NN" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0xC003);
+    var val = chip8.registers[0];
+    try expect(val >= 0 and val <= 3);
+    try expect(chip8.pc == 0x202);
+    chip8.runInstruction(0xC1FF);
+    val = chip8.registers[1];
+    try expect(val >= 0 and val <= 0xFF);
     try expect(chip8.pc == 0x204);
 }
