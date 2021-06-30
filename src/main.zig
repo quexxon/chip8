@@ -126,26 +126,26 @@ const Chip8 = struct {
             0xB000 => self.pc = (instruction & 0xFFF) + self.registers[0],
             0xC000 => vx.* = randomByte() & @intCast(u8, instruction & 0xFF),
             0xD000 => {
-                const x = vx.*;
-                const y = vy.*;
+                const x = vx.* % 64;
+                const y = vy.* % 32;
                 const rows = @intCast(u4, instruction & 0xF);
-                const offset = @intCast(u6, 64 - x - 8);
+                const offset: i32 = 64 - @as(i32, x) - 8;
                 var i: u4 = 0;
                 var start_addr = self.i;
                 var vf = &self.registers[0xF];
                 vf.* = 0;
-                while (i < rows) : (i += 1) {
+                while (i <= rows) : (i += 1) {
                     var row = &self.display[y + i];
                     const val = if (offset < 0)
-                        @intCast(u64, self.ram[start_addr + i]) >> offset
+                        @intCast(u64, self.ram[start_addr + i]) >> @intCast(u6, -offset)
                     else
-                        @intCast(u64, self.ram[start_addr + i]) << offset;
+                        @intCast(u64, self.ram[start_addr + i]) << @intCast(u6, offset);
 
                     if (vf.* == 0) {
-                        vf.* = @boolToInt(row.* ^ val > 0);
+                        vf.* = @boolToInt((row.* ^ val) & val != val);
                     }
                     row.* ^= val;
-                    if (i == 15) break;
+                    if (y + i == 31 or i == 15) break;
                 }
             },
             0xE000 => switch (instruction & 0xFF) {
@@ -173,7 +173,7 @@ const Chip8 = struct {
                 },
                 0x15 => self.delay_timer = vx.*,
                 0x18 => self.sound_timer = vx.*,
-                0x1E => self.i += vx.*,
+                0x1E => _ = @addWithOverflow(u16, self.i, vx.*, &self.i),
                 0x29 => self.i = 5 * vx.*,
                 0x33 => {
                     self.ram[self.i] = vx.* / 100;
@@ -181,13 +181,13 @@ const Chip8 = struct {
                     self.ram[self.i + 2] = (vx.* % 100) % 10;
                 },
                 0x55 => {
-                    const n = (instruction & 0xF00) + 1;
-                    mem.copy(u8, self.ram[self.i..n], self.registers[0..n]);
+                    const n = ((instruction & 0xF00) >> 8) + 1;
+                    mem.copy(u8, self.ram[self.i .. self.i + n], self.registers[0..n]);
                     self.i += n;
                 },
                 0x65 => {
-                    const n = (instruction & 0xF00) + 1;
-                    mem.copy(u8, self.registers[0..n], self.ram[self.i..n]);
+                    const n = ((instruction & 0xF00) >> 8) + 1;
+                    mem.copy(u8, self.registers[0..n], self.ram[self.i .. self.i + n]);
                     self.i += n;
                 },
                 else => {},
@@ -469,4 +469,179 @@ test "0xCXNN - VX = randomByte() & NN" {
     val = chip8.registers[1];
     try expect(val >= 0 and val <= 0xFF);
     try expect(chip8.pc == 0x204);
+}
+
+test "0xDXYN - Draw N+1 bytes of sprite data starting at I to (VX,VY)" {
+    var chip8 = Chip8.init();
+    var i: u16 = 0;
+    while (i < 16) : (i += 1) {
+        chip8.ram[0x300 + i] = 0xFF;
+    }
+    chip8.i = 0x300;
+    chip8.runInstruction(0xD010);
+    try expect(chip8.display[0] == 0xFF00_0000_0000_0000);
+    try expect(chip8.registers[0xF] == 0);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[0] = 4;
+    chip8.runInstruction(0xD010);
+    try expect(chip8.display[0] == 0xF0F0_0000_0000_0000);
+    try expect(chip8.registers[0xF] == 1);
+    try expect(chip8.pc == 0x204);
+    chip8.registers[0] = 63;
+    chip8.registers[1] = 31;
+    chip8.runInstruction(0xD01F);
+    try expect(chip8.display[0] == 0xF0F0_0000_0000_0000);
+    try expect(chip8.display[31] == 0x0000_0000_0000_0001);
+    try expect(chip8.registers[0xF] == 0);
+    try expect(chip8.pc == 0x206);
+    chip8.registers[0] = 56;
+    chip8.registers[1] = 1;
+    chip8.runInstruction(0xD01F);
+    var row: u5 = 1;
+    while (row <= 16) : (row += 1) {
+        try expect(chip8.display[row] == 0xFF);
+    }
+    try expect(chip8.registers[0xF] == 0);
+    try expect(chip8.pc == 0x208);
+    chip8.registers[0] = 60;
+    chip8.registers[1] = 1;
+    chip8.runInstruction(0xD010);
+    try expect(chip8.display[1] == 0xF0);
+    try expect(chip8.registers[0xF] == 1);
+    try expect(chip8.pc == 0x20A);
+}
+
+test "0xEX9E - Skip next instruction if key X is pressed" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0xE09E);
+    try expect(chip8.pc == 0x202);
+    chip8.keys |= 1;
+    chip8.runInstruction(0xE09E);
+    try expect(chip8.pc == 0x206);
+}
+
+test "0xEXA1 - Skip next instruction if key X is not pressed" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0xE0A1);
+    try expect(chip8.pc == 0x204);
+    chip8.keys |= 1;
+    chip8.runInstruction(0xE0A1);
+    try expect(chip8.pc == 0x206);
+}
+
+test "0xFX07 - Store current value of delay timer in VX" {
+    var chip8 = Chip8.init();
+    const start_addr = chip8.pc;
+    for (chip8.registers) |*reg, i| {
+        chip8.delay_timer = randomByte();
+        chip8.runInstruction(0xF007 + @intCast(u16, 0x100 * i));
+        try expect(reg.* == chip8.delay_timer);
+        try expect(chip8.pc == start_addr + ((i + 1) * 2));
+    }
+}
+
+test "0xFX0A - Await a keypress and store the value in VX" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0xF00A);
+    try expect(chip8.pc == 0x200);
+    chip8.keys |= 0b1100;
+    chip8.runInstruction(0xF00A);
+    try expect(chip8.registers[0] == 2);
+    try expect(chip8.pc == 0x202);
+}
+
+test "0xFX15 - Set the delay timer to the value of VX" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0xF015);
+    try expect(chip8.delay_timer == 0);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[1] = 0xFF;
+    chip8.runInstruction(0xF115);
+    try expect(chip8.delay_timer == 0xFF);
+    try expect(chip8.pc == 0x204);
+}
+
+test "0xFX18 - Set the sound timer to the value of VX" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0xF018);
+    try expect(chip8.sound_timer == 0);
+    try expect(chip8.pc == 0x202);
+    chip8.registers[1] = 0xFF;
+    chip8.runInstruction(0xF118);
+    try expect(chip8.sound_timer == 0xFF);
+    try expect(chip8.pc == 0x204);
+}
+
+test "0xFX1E - I += VX (w/o carry)" {
+    var chip8 = Chip8.init();
+    chip8.runInstruction(0xF01E);
+    try expect(chip8.i == 0);
+    try expect(chip8.pc == 0x202);
+    chip8.i = 0xF0;
+    chip8.registers[1] = 0xF;
+    chip8.runInstruction(0xF11E);
+    try expect(chip8.i == 0xFF);
+    try expect(chip8.pc == 0x204);
+    chip8.i = 0xFFFF;
+    chip8.registers[1] = 1;
+    chip8.runInstruction(0xF11E);
+    try expect(chip8.i == 0);
+    try expect(chip8.pc == 0x206);
+}
+
+test "0xFX29 - Set I to the address of the sprite for char X" {
+    var chip8 = Chip8.init();
+    var char: u8 = 0;
+    const start_addr = chip8.pc;
+    while (char < 16) : (char += 1) {
+        chip8.registers[char] = char;
+        chip8.runInstruction(0xF029 + 0x100 * @as(u16, char));
+        try expect(chip8.i == 5 * char);
+        try expect(chip8.pc == start_addr + ((char + 1) * 2));
+        if (char == 15) break;
+    }
+}
+
+test "0xFX33 - Store the BCD representation of VX at I, I+1, and I+2" {
+    var chip8 = Chip8.init();
+    chip8.registers[0] = 123;
+    chip8.i = 0x300;
+    chip8.runInstruction(0xF033);
+    try expect(chip8.ram[0x300] == 1);
+    try expect(chip8.ram[0x301] == 2);
+    try expect(chip8.ram[0x302] == 3);
+    try expect(chip8.pc == 0x202);
+}
+
+test "0xFX55 - Store [V0, VX] in memory starting at I (incrementing I)" {
+    var chip8 = Chip8.init();
+    const data = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+    for (data) |val, i| {
+        chip8.registers[i] = val;
+    }
+    const start_addr = 0x300;
+    chip8.i = start_addr;
+    chip8.runInstruction(0xF455);
+    const mem_range = chip8.ram[start_addr .. start_addr + 5];
+    try expect(mem.eql(u8, mem_range, data[0..5]));
+    try expect(mem.eql(u8, mem_range, chip8.registers[0..5]));
+    try expect(chip8.i == start_addr + 5);
+    try expect(chip8.pc == 0x202);
+}
+
+test "0xFX65 - Fill [V0, VX] from memory starting at I (incrementing I)" {
+    var chip8 = Chip8.init();
+    const data = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+    const start_addr = 0x300;
+    for (data) |val, i| {
+        chip8.ram[start_addr + i] = val;
+    }
+    chip8.i = start_addr;
+    chip8.runInstruction(0xF465);
+    const reg_range = chip8.registers[0..5];
+    const mem_range = chip8.ram[start_addr .. start_addr + 5];
+    try expect(mem.eql(u8, reg_range, data[0..5]));
+    try expect(mem.eql(u8, reg_range, mem_range));
+    try expect(chip8.i == start_addr + 5);
+    try expect(chip8.pc == 0x202);
 }
