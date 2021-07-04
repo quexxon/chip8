@@ -1,12 +1,17 @@
 const std = @import("std");
 const mem = std.mem;
 const expect = std.testing.expect;
-const is_test = @import("builtin").is_test;
+const builtin = @import("builtin");
 
 extern fn random() u8;
+extern fn consoleLog(message_ptr: [*]const u8, message_len: usize) void;
+extern fn logRam(ram: [*]u8, ram_len: usize) void;
+extern fn readBytes(key_ptr: [*]const u8, key_len: usize, buf_ptr: [*]u8, buf_maxlen: usize) usize;
+extern fn writeBytes(key_ptr: [*]const u8, key_len: usize, buf_ptr: [*]u8, buf_maxlen: usize) void;
+extern fn logInt(int: u8) void;
 
 fn randomByte() u8 {
-    if (is_test) {
+    if (builtin.is_test) {
         var buffer = [1]u8{0};
         std.os.getrandom(&buffer) catch return 0;
         return buffer[0];
@@ -14,6 +19,8 @@ fn randomByte() u8 {
         return random();
     }
 }
+
+const RAM_SIZE = 4096;
 
 const Chip8 = struct {
     pc: u16,
@@ -23,7 +30,7 @@ const Chip8 = struct {
     sp: u4,
     stack: [16]u16,
     registers: [16]u8,
-    ram: [4096]u8,
+    ram: [RAM_SIZE]u8,
     display: [32]u64, // 64 x 32
     keys: u16,
 
@@ -58,6 +65,10 @@ const Chip8 = struct {
             .display = [1]u64{0} ** 32,
             .keys = 0,
         };
+    }
+
+    pub fn clearRam(self: *Chip8) void {
+        mem.set(u8, &self.ram, 0);
     }
 
     pub fn runInstruction(self: *Chip8, instruction: u16) void {
@@ -195,7 +206,114 @@ const Chip8 = struct {
             else => {},
         }
     }
+
+    pub fn setKey(self: *Chip8, key: u4) void {
+        self.keys |= @as(u16, 1) << key;
+    }
 };
+
+const State = struct { chip8: Chip8 };
+
+var state: State = undefined;
+
+export fn init() void {
+    state = State{ .chip8 = Chip8.init() };
+}
+
+export fn getPc() c_uint {
+    return state.chip8.pc;
+}
+
+const LoadProgramStatus = enum {
+    success,
+    alloc_error,
+    overread,
+    access_error,
+    parse_error,
+};
+
+fn keyCodeToKey(keyCode: c_uint) ?u16 {
+    var key: u4 = undefined;
+    switch (keyCode) {
+        88 => key = 0x0, // x
+        49 => key = 0x1, // 1
+        50 => key = 0x2, // 2
+        51 => key = 0x3, // 3
+        81 => key = 0x4, // q
+        87 => key = 0x5, // w
+        69 => key = 0x6, // e
+        65 => key = 0x7, // a
+        83 => key = 0x8, // s
+        68 => key = 0x9, // d
+        90 => key = 0xA, // z
+        67 => key = 0xB, // c
+        52 => key = 0xC, // 4
+        82 => key = 0xD, // r
+        70 => key = 0xE, // f
+        86 => key = 0xF, // v
+        else => return null,
+    }
+    return @as(u16, 1) << key;
+}
+
+export fn loadProgram() c_uint {
+    var buffer = std.heap.page_allocator.alloc(u8, 4096 * 2) catch {
+        return @enumToInt(LoadProgramStatus.alloc_error);
+    };
+    defer std.heap.page_allocator.free(buffer);
+
+    const key = "program";
+    const bytes_read = readBytes(key, key.len, buffer.ptr, buffer.len);
+    if (bytes_read > buffer.len) {
+        return @enumToInt(LoadProgramStatus.overread);
+    }
+
+    var iter = mem.split(buffer[0..bytes_read], "\n");
+    var i = state.chip8.pc;
+    while (iter.next()) |line| {
+        if (line.len == 0) continue;
+        if (i + 2 > state.chip8.ram.len) {
+            return @enumToInt(LoadProgramStatus.access_error);
+        }
+        const instruction = std.fmt.parseUnsigned(u16, line, 16) catch {
+            return @enumToInt(LoadProgramStatus.parse_error);
+        };
+        const msb = @intCast(u8, instruction >> 8);
+        const lsb = @intCast(u8, instruction & 0xFF);
+        state.chip8.ram[i] = msb;
+        state.chip8.ram[i + 1] = lsb;
+        i += 2;
+    }
+
+    return @enumToInt(LoadProgramStatus.success);
+}
+
+export fn getRam() void {
+    logRam(&state.chip8.ram, state.chip8.ram.len);
+}
+
+export fn getFrame() void {
+    var frame = [1]u8{0} ** (64 * 32 * 4);
+    frame[0] = 0xFF;
+    const key = "frame";
+    writeBytes(key, key.len, &frame, frame.len);
+}
+
+export fn getKeys() c_uint {
+    return state.chip8.keys;
+}
+
+export fn onKeyDown(key_code: c_uint) void {
+    if (keyCodeToKey(key_code)) |key| {
+        state.chip8.keys |= key;
+    }
+}
+
+export fn onKeyUp(key_code: c_uint) void {
+    if (keyCodeToKey(key_code)) |key| {
+        state.chip8.keys &= ~key;
+    }
+}
 
 test "0x00E0 - Clear Display" {
     var chip8 = Chip8.init();
